@@ -131,6 +131,75 @@ export async function downloadFileWithAuth(
   });
 }
 
+export interface ZipPathEntry {
+  path: string;
+  isDirectory: boolean;
+}
+
+export async function downloadZipWithAuth(
+  serverId: number,
+  paths: ZipPathEntry[],
+  filename: string,
+  onProgress?: (pct: number) => void
+): Promise<void> {
+  await withTokenRetry(async (token) => {
+    const response = await fetch(`/api/servers/${serverId}/files/zip`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ paths, action: 'download' }),
+    });
+    if (response.status === 401) throw { status: 401 };
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || data.message || 'Zip download failed');
+    }
+
+    const contentLength = Number(response.headers.get('Content-Length') || 0);
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('Zip download failed');
+
+    const chunks: Uint8Array[] = [];
+    let received = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      received += value.length;
+      if (onProgress && contentLength) onProgress((received / contentLength) * 100);
+    }
+
+    const blob = new Blob(chunks, { type: 'application/zip' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+}
+
+export async function createZipOnServer(
+  serverId: number,
+  paths: ZipPathEntry[],
+  destinationDir: string,
+  outputName: string
+): Promise<string> {
+  const response = await fetchWithAuth(`/api/servers/${serverId}/files/zip`, {
+    method: 'POST',
+    body: JSON.stringify({ paths, action: 'create', destinationDir, outputName }),
+  });
+  if (!response.ok) {
+    const data = await response.json();
+    throw new Error(data.error || data.message || 'Failed to create zip');
+  }
+  const data = await response.json();
+  return data.path as string;
+}
+
 export async function fetchFileContent(serverId: number, remotePath: string): Promise<string> {
   const response = await fetchWithAuth(
     `/api/servers/${serverId}/files/content?path=${encodeURIComponent(remotePath)}`

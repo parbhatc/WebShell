@@ -111,7 +111,7 @@ setInterval(() => {
   }
 }, 15_000);
 
-async function withSftp<T>(
+export async function withSftp<T>(
   serverId: number,
   userId: number,
   fn: (sftp: SFTPWrapper) => Promise<T>
@@ -261,6 +261,18 @@ export const writeRemoteFileContent = async (
   }
   await withSftp(serverId, userId, (sftp) =>
     sftpCallback((cb) => sftp.writeFile(remotePath, content, 'utf8', cb))
+  );
+  touchSession(userId, serverId);
+};
+
+export const writeRemoteBinaryFile = async (
+  serverId: number,
+  userId: number,
+  remotePath: string,
+  data: Buffer
+): Promise<void> => {
+  await withSftp(serverId, userId, (sftp) =>
+    sftpCallback((cb) => sftp.writeFile(remotePath, data, cb))
   );
   touchSession(userId, serverId);
 };

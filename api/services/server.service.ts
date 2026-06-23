@@ -1,6 +1,7 @@
 import Server from '../models/Server';
 import { encrypt, decrypt } from './crypto.service';
 import { listRemoteFiles, createRemoteFile, createRemoteDirectory, deleteRemotePath, renameRemotePath, streamRemoteFileDownload, streamRemoteFileUpload, readRemoteFileContent, writeRemoteFileContent } from './sftp.service';
+import { zipPathsToDownload, zipPathsToRemote, type ZipEntry } from './zip.service';
 
 export const getServers = async (userId: number) => {
   const servers = await Server.findAll({ where: { userId } });
@@ -127,3 +128,18 @@ export const writeServerFileContent = async (
   remotePath: string,
   content: string
 ) => writeRemoteFileContent(id, userId, remotePath, content);
+
+export const downloadServerZip = async (
+  id: number,
+  userId: number,
+  entries: ZipEntry[],
+  res: import('express').Response,
+  filename: string
+) => zipPathsToDownload(id, userId, entries, res, filename);
+
+export const createServerZip = async (
+  id: number,
+  userId: number,
+  entries: ZipEntry[],
+  outputPath: string
+) => zipPathsToRemote(id, userId, entries, outputPath);

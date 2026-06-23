@@ -33,6 +33,22 @@ export default function SshTerminal({ serverId }: SshTerminalProps) {
     term.open(containerRef.current);
     fitAddon.fit();
 
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.type !== 'keydown') return true;
+
+      const isCopy = (event.ctrlKey || event.metaKey) && event.key === 'c';
+      if (isCopy && term.hasSelection()) {
+        event.preventDefault();
+        const selection = term.getSelection();
+        if (selection) {
+          void navigator.clipboard.writeText(selection);
+        }
+        return false;
+      }
+
+      return true;
+    });
+
     const ws = new WebSocket(getWebSocketUrl(serverId));
     ws.binaryType = 'arraybuffer';
 
@@ -76,9 +92,13 @@ export default function SshTerminal({ serverId }: SshTerminalProps) {
     };
     window.addEventListener('resize', handleResize);
 
+    const resizeObserver = new ResizeObserver(() => handleResize());
+    resizeObserver.observe(containerRef.current);
+
     return () => {
       dataDisposable.dispose();
       resizeDisposable.dispose();
+      resizeObserver.disconnect();
       window.removeEventListener('resize', handleResize);
       ws.close();
       term.dispose();

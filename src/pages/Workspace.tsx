@@ -1,9 +1,29 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { PanelLeftClose, PanelLeftOpen, Server } from 'lucide-react';
 import { useServerStore } from '@/stores/useServerStore';
 import SshTerminal from '@/components/SshTerminal';
 import FileExplorer from '@/components/FileExplorer';
+import HorizontalResizeHandle from '@/components/HorizontalResizeHandle';
+
+const FILES_PANEL_MIN = 180;
+const TERMINAL_MIN = 100;
+const FILES_PANEL_DEFAULT = 320;
+const SERVERS_SIDEBAR_WIDTH = 192;
+const RESIZE_HANDLE_WIDTH = 6;
+
+function clampFilesPanelWidth(width: number, containerWidth: number, serversOpen: boolean): number {
+  const serversWidth = serversOpen ? SERVERS_SIDEBAR_WIDTH : 0;
+  const maxFiles = containerWidth - serversWidth - TERMINAL_MIN - RESIZE_HANDLE_WIDTH;
+  return Math.min(maxFiles, Math.max(FILES_PANEL_MIN, width));
+}
+
+function getSavedFilesPanelWidth(): number {
+  const saved = localStorage.getItem('files-panel-width');
+  const n = saved ? parseInt(saved, 10) : FILES_PANEL_DEFAULT;
+  if (Number.isNaN(n)) return FILES_PANEL_DEFAULT;
+  return Math.max(FILES_PANEL_MIN, n);
+}
 
 export default function WorkspacePage() {
   const { id } = useParams();
@@ -13,14 +33,45 @@ export default function WorkspacePage() {
   const [serversOpen, setServersOpen] = useState(
     () => localStorage.getItem('servers-sidebar') !== 'closed'
   );
+  const [filesPanelWidth, setFilesPanelWidth] = useState(getSavedFilesPanelWidth);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  const clampToContainer = useCallback(
+    (width: number) => {
+      const containerWidth = contentRef.current?.clientWidth ?? window.innerWidth;
+      return clampFilesPanelWidth(width, containerWidth, serversOpen);
+    },
+    [serversOpen]
+  );
 
   useEffect(() => {
     fetchServers();
   }, [fetchServers]);
 
   useEffect(() => {
+    setFilesPanelWidth((w) => clampToContainer(w));
+  }, [clampToContainer]);
+
+  useEffect(() => {
+    const onWindowResize = () => setFilesPanelWidth((w) => clampToContainer(w));
+    window.addEventListener('resize', onWindowResize);
+    return () => window.removeEventListener('resize', onWindowResize);
+  }, [clampToContainer]);
+
+  useEffect(() => {
     localStorage.setItem('servers-sidebar', serversOpen ? 'open' : 'closed');
   }, [serversOpen]);
+
+  useEffect(() => {
+    localStorage.setItem('files-panel-width', String(filesPanelWidth));
+  }, [filesPanelWidth]);
+
+  const onFilesPanelResize = useCallback(
+    (deltaX: number) => {
+      setFilesPanelWidth((w) => clampToContainer(w - deltaX));
+    },
+    [clampToContainer]
+  );
 
   if (!serverId) {
     return (
@@ -53,7 +104,7 @@ export default function WorkspacePage() {
         </span>
         <span className="w-24" />
       </header>
-      <div className="flex flex-grow overflow-hidden min-h-0">
+      <div ref={contentRef} className="flex flex-grow overflow-hidden min-h-0">
         {serversOpen && (
           <div className="w-48 bg-slate-900 border-r border-slate-800 p-4 overflow-y-auto shrink-0">
             <div className="flex items-center gap-2 mb-4 text-slate-400">
@@ -80,11 +131,16 @@ export default function WorkspacePage() {
           </div>
         )}
 
-        <div className="flex-grow bg-black p-2 min-w-0">
+        <div className="flex-grow bg-black p-2 min-w-0" style={{ minWidth: TERMINAL_MIN }}>
           <SshTerminal serverId={serverId} />
         </div>
 
-        <div className="w-80 bg-slate-950 border-l border-slate-800 p-4 overflow-hidden shrink-0 flex flex-col min-h-0">
+        <HorizontalResizeHandle onDrag={onFilesPanelResize} />
+
+        <div
+          style={{ width: filesPanelWidth }}
+          className="bg-slate-950 border-l border-slate-800 p-4 overflow-hidden shrink-0 flex flex-col min-h-0"
+        >
           <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-4 shrink-0">Files</h2>
           <div className="flex-1 min-h-0">
             <FileExplorer serverId={serverId} />

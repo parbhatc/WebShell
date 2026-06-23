@@ -3,6 +3,7 @@ import {
   ChevronRight,
   Download,
   File,
+  FileArchive,
   FilePen,
   Folder,
   FolderUp,
@@ -13,7 +14,7 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react';
-import { downloadFileWithAuth, fetchWithAuth, uploadFileWithAuth } from '@/lib/api';
+import { createZipOnServer, downloadFileWithAuth, downloadZipWithAuth, fetchWithAuth, uploadFileWithAuth } from '@/lib/api';
 import FileEditor from '@/components/FileEditor';
 import LoadingSpinner from '@/components/LoadingSpinner';
 
@@ -76,6 +77,8 @@ export default function FileExplorer({ serverId }: FileExplorerProps) {
   const [transfer, setTransfer] = useState<Transfer | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [editingFile, setEditingFile] = useState<RemoteFile | null>(null);
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+  const [lastSelectedPath, setLastSelectedPath] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadTargetRef = useRef('/');
   const cacheRef = useRef<Map<string, RemoteFile[]>>(new Map());
@@ -134,8 +137,15 @@ export default function FileExplorer({ serverId }: FileExplorerProps) {
     cacheRef.current.clear();
     const savedPath = getSavedPath(serverId);
     setCurrentPath(savedPath);
+    setSelectedPaths(new Set());
+    setLastSelectedPath(null);
     loadFiles(savedPath);
   }, [serverId, loadFiles]);
+
+  useEffect(() => {
+    setSelectedPaths(new Set());
+    setLastSelectedPath(null);
+  }, [currentPath]);
 
   useEffect(() => {
     const closeMenu = () => setContextMenu(null);
@@ -202,6 +212,70 @@ export default function FileExplorer({ serverId }: FileExplorerProps) {
     }
   };
 
+  const zipEntriesFromFiles = (items: RemoteFile[]) =>
+    items.map((f) => ({ path: f.path, isDirectory: f.isDirectory }));
+
+  const zipDownloadName = (items: RemoteFile[]) => {
+    if (items.length === 1) return `${items[0].name}.zip`;
+    return 'archive.zip';
+  };
+
+  const downloadZip = async (items: RemoteFile[]) => {
+    const name = zipDownloadName(items);
+    setTransfer({ name, progress: 0, type: 'download' });
+    try {
+      await downloadZipWithAuth(serverId, zipEntriesFromFiles(items), name, (pct) =>
+        setTransfer({ name, progress: pct, type: 'download' })
+      );
+    } finally {
+      setTransfer(null);
+    }
+  };
+
+  const zipOnServer = async (items: RemoteFile[], destDir: string, defaultName: string) => {
+    askName('Zip file name', defaultName, async (outputName) => {
+      await createZipOnServer(serverId, zipEntriesFromFiles(items), destDir, outputName);
+      await refreshCurrent();
+    });
+  };
+
+  const getSelectedFiles = (): RemoteFile[] => {
+    if (selectedPaths.size === 0) return [];
+    return files.filter((f) => selectedPaths.has(f.path));
+  };
+
+  const handleItemClick = (e: React.MouseEvent, file: RemoteFile) => {
+    if (e.ctrlKey || e.metaKey) {
+      setSelectedPaths((prev) => {
+        const next = new Set(prev);
+        if (next.has(file.path)) next.delete(file.path);
+        else next.add(file.path);
+        return next;
+      });
+      setLastSelectedPath(file.path);
+      return;
+    }
+
+    if (e.shiftKey && lastSelectedPath) {
+      const paths = files.map((f) => f.path);
+      const start = paths.indexOf(lastSelectedPath);
+      const end = paths.indexOf(file.path);
+      if (start >= 0 && end >= 0) {
+        const [lo, hi] = start < end ? [start, end] : [end, start];
+        setSelectedPaths(new Set(paths.slice(lo, hi + 1)));
+      }
+      return;
+    }
+
+    setSelectedPaths(new Set([file.path]));
+    setLastSelectedPath(file.path);
+  };
+
+  const handleItemDoubleClick = (file: RemoteFile) => {
+    if (file.isDirectory) loadFiles(file.path);
+    else setEditingFile(file);
+  };
+
   const uploadFiles = async (fileList: FileList | File[], targetPath = currentPath) => {
     const items = Array.from(fileList);
     for (const file of items) {
@@ -253,7 +327,7 @@ export default function FileExplorer({ serverId }: FileExplorerProps) {
     setContextMenu({ x: e.clientX, y: e.clientY, file });
   };
 
-  const runAction = async (action: () => Promise<void>) => {
+  const runAction = async (action: () => void | Promise<void>) => {
     setContextMenu(null);
     try {
       await action();
@@ -276,11 +350,41 @@ export default function FileExplorer({ serverId }: FileExplorerProps) {
   };
 
   const menuActions = (file: RemoteFile | null) => {
+    const selected = getSelectedFiles();
+    const zipTargets =
+      file && selected.length > 1 && selected.some((s) => s.path === file.path)
+        ? selected
+        : file
+          ? [file]
+          : selected;
+
+    const zipMenu =
+      zipTargets.length > 0
+        ? [
+            {
+              label: zipTargets.length > 1 ? `Download ${zipTargets.length} items as ZIP` : 'Download as ZIP',
+              icon: FileArchive,
+              onClick: () => downloadZip(zipTargets),
+            },
+            {
+              label: zipTargets.length > 1 ? `Zip ${zipTargets.length} items here` : 'Zip here',
+              icon: FileArchive,
+              onClick: () =>
+                zipOnServer(
+                  zipTargets,
+                  currentPath,
+                  zipTargets.length === 1 ? `${zipTargets[0].name}.zip` : 'archive.zip'
+                ),
+            },
+          ]
+        : [];
+
     if (!file) {
       return [
         { label: 'Upload Files', icon: Upload, onClick: () => { uploadTargetRef.current = currentPath; fileInputRef.current?.click(); } },
         { label: 'New File', icon: Plus, onClick: () => askName('New file name', 'untitled.txt', (n) => createItem(n, 'file')) },
         { label: 'New Folder', icon: FolderUp, onClick: () => askName('New folder name', 'newfolder', (n) => createItem(n, 'directory')) },
+        ...zipMenu,
         { label: 'Refresh', icon: RefreshCw, onClick: () => refreshCurrent() },
       ];
     }
@@ -290,6 +394,7 @@ export default function FileExplorer({ serverId }: FileExplorerProps) {
         { label: 'Upload Here', icon: Upload, onClick: () => { uploadTargetRef.current = file.path; fileInputRef.current?.click(); } },
         { label: 'New File', icon: Plus, onClick: () => askName('New file name', 'untitled.txt', (n) => createItem(n, 'file', file.path)) },
         { label: 'New Folder', icon: FolderUp, onClick: () => askName('New folder name', 'newfolder', (n) => createItem(n, 'directory', file.path)) },
+        ...zipMenu,
         { label: 'Rename', icon: Pencil, onClick: () => askName('Rename folder', file.name, (n) => renameItem(file, n)) },
         { label: 'Delete', icon: Trash2, onClick: () => deleteItem(file), danger: true },
       ];
@@ -297,6 +402,7 @@ export default function FileExplorer({ serverId }: FileExplorerProps) {
     return [
       { label: 'Edit', icon: FilePen, onClick: () => setEditingFile(file) },
       { label: 'Download', icon: Download, onClick: () => downloadItem(file) },
+      ...zipMenu,
       { label: 'Rename', icon: Pencil, onClick: () => askName('Rename file', file.name, (n) => renameItem(file, n)) },
       { label: 'Delete', icon: Trash2, onClick: () => deleteItem(file), danger: true },
     ];
@@ -333,6 +439,18 @@ export default function FileExplorer({ serverId }: FileExplorerProps) {
         <button onClick={() => refreshCurrent()} className="p-1.5 rounded-md hover:bg-white/10 text-slate-400 hover:text-white transition-colors ml-auto" title="Refresh">
           <RefreshCw size={15} className={loading || navigating ? 'animate-spin' : ''} />
         </button>
+        {selectedPaths.size > 0 && (
+          <>
+            <button
+              onClick={() => downloadZip(getSelectedFiles())}
+              className="p-1.5 rounded-md hover:bg-amber-500/20 text-amber-400 transition-colors"
+              title="Download selection as ZIP"
+            >
+              <FileArchive size={15} />
+            </button>
+            <span className="text-[10px] text-sky-400 font-mono">{selectedPaths.size}</span>
+          </>
+        )}
       </div>
 
       {/* Breadcrumbs */}
@@ -418,11 +536,13 @@ export default function FileExplorer({ serverId }: FileExplorerProps) {
           {files.map((file) => (
             <li key={file.path}>
               <button
-                onClick={() => (file.isDirectory ? loadFiles(file.path) : setEditingFile(file))}
+                onClick={(e) => handleItemClick(e, file)}
+                onDoubleClick={() => handleItemDoubleClick(file)}
                 onMouseEnter={() => file.isDirectory && prefetch(file.path)}
-                onDoubleClick={() => !file.isDirectory && setEditingFile(file)}
                 onContextMenu={(e) => handleContextMenu(e, file)}
-                className="w-full grid grid-cols-[1fr_auto] gap-2 items-center px-3 py-2 hover:bg-white/5 border-b border-slate-800/50 transition-colors group"
+                className={`w-full grid grid-cols-[1fr_auto] gap-2 items-center px-3 py-2 hover:bg-white/5 border-b border-slate-800/50 transition-colors group ${
+                  selectedPaths.has(file.path) ? 'bg-sky-500/15 border-sky-500/20' : ''
+                }`}
               >
                 <span className="flex items-center gap-2 min-w-0 text-left">
                   {file.isDirectory ? (

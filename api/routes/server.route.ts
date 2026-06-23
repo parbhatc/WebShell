@@ -7,6 +7,7 @@ const router = Router();
 router.use(authMiddleware);
 
 router.get('/', serverController.getServers);
+router.post('/:id/files/zip', serverController.zipFiles);
 router.get('/:id/files/download', serverController.downloadFile);
 router.get('/:id/files/content', serverController.readFileContent);
 router.put('/:id/files/content', serverController.saveFileContent);

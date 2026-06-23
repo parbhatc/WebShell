@@ -160,3 +160,43 @@ export const saveFileContent = async (req: AuthRequest, res: Response) => {
         res.status(500).json({ message: 'Error saving file', error: error.message });
     }
 };
+
+export const zipFiles = async (req: AuthRequest, res: Response) => {
+    try {
+        const serverId = parseInt(req.params.id, 10);
+        const { paths, action, outputName, destinationDir } = req.body as {
+            paths?: { path: string; isDirectory: boolean }[];
+            action?: 'download' | 'create';
+            outputName?: string;
+            destinationDir?: string;
+        };
+
+        if (!paths?.length) {
+            return res.status(400).json({ message: 'paths is required' });
+        }
+        if (!action || !['download', 'create'].includes(action)) {
+            return res.status(400).json({ message: 'action must be download or create' });
+        }
+
+        const entries = paths.map((p) => ({ path: p.path, isDirectory: !!p.isDirectory }));
+
+        if (action === 'download') {
+            const filename =
+                paths.length === 1
+                    ? `${paths[0].path.split('/').filter(Boolean).pop() || 'archive'}.zip`
+                    : 'archive.zip';
+            await serverService.downloadServerZip(serverId, req.userId, entries, res, filename);
+            return;
+        }
+
+        const dir = destinationDir || '/';
+        const name = (outputName || 'archive.zip').replace(/\.zip$/i, '') + '.zip';
+        const outputPath = dir === '/' ? `/${name}` : `${dir.replace(/\/$/, '')}/${name}`;
+        await serverService.createServerZip(serverId, req.userId, entries, outputPath);
+        res.status(201).json({ message: 'Zip created successfully', path: outputPath });
+    } catch (error) {
+        if (!res.headersSent) {
+            res.status(500).json({ message: 'Error creating zip', error: error.message });
+        }
+    }
+};
